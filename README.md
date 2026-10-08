@@ -106,6 +106,29 @@ also shown on that screen.
   46-pixel reach while the Striker's `V` slide trades damage for a longer, lower poke.
 - **High score** — saved between sessions.
 
+## Before the fight
+
+`START ARCADE` opens a three-step pre-fight flow instead of dropping you straight into a
+bout — **arrows move, `Enter` confirms, `Esc` steps back one screen**:
+
+1. **Choose your fighter** — a full-size preview beside a grid of every selectable
+   fighter, with HP, speed and body size under the preview.
+2. **Choose the stage** — a grid of live thumbnails for all twelve stages. The pick
+   sticks for the whole run.
+3. **Choose the round count** — first to **1, 2 or 3** wins. Rounds are scored inside
+   the fight; while a multi-round match is on, the score strip shows `RD n` with the
+   running round score.
+
+Every fight then opens with an animated **3 - 2 - 1 / FIGHT!** intro: each number pops,
+wobbles and fades behind an expanding shock ring, then `FIGHT!` slams in under speed
+lines and a white flash. Nobody can move until it lands, and the flash respects the
+**reduced flash** accessibility setting.
+
+Stage dressing: the castle packs ship their hedge-and-grass band as a separate layer that
+reads as a stray tile set next to the masonry, so those layers are dropped — Castle_1 and
+Castle_2 keep their fountains and floors. The open-sky ocean stages now have soft clouds
+drifting behind the scenery.
+
 ## Settings
 
 **Settings** covers Audio, Display, Gameplay (including rival difficulty: Easy / Normal /
