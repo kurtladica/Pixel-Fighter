@@ -1023,7 +1023,7 @@ class Player:
             text, colour = "SPECIAL %d%%" % round(self.meter), (150, 156, 172)
         screen.blit(outlined_text(font, text, colour), (x + w + 10, y - 1))
 
-    def set_character(self, spec):
+    def set_character(self, spec, quiet: bool = False):
         """Swap in a different fighter's art, keeping position and health."""
         if spec is None or not spec.exists:
             return False
@@ -1044,7 +1044,8 @@ class Player:
             self._set_anim(state, build_anim(pack, fname, state,
                                              spec.cell_w, spec.zoom), dur)
         self.set_state("idle")
-        log("player character -> %s (%d sheets)" % (spec.label, len(spec.sheets)))
+        if not quiet:
+            log("player character -> %s (%d sheets)" % (spec.label, len(spec.sheets)))
         return True
 
 
@@ -2123,7 +2124,7 @@ def fighter_index(player: Player) -> int:
     return 0
 
 
-def apply_fighter_spec(player: Player, spec) -> bool:
+def apply_fighter_spec(player: Player, spec, quiet: bool = False) -> bool:
     """Equip one roster fighter, ignoring entries whose art is missing."""
     if spec is None or not spec.exists:
         return False
@@ -2131,7 +2132,7 @@ def apply_fighter_spec(player: Player, spec) -> bool:
         player.use_prototype(spec)
         player.set_state("idle")
         return True
-    return player.set_character(spec)
+    return player.set_character(spec, quiet=quiet)
 
 
 def apply_fighter(player: Player, index: int) -> None:
@@ -2146,7 +2147,7 @@ def fighter_preview(spec) -> Optional[pygame.Surface]:
     if not spec.exists:
         return None
     probe = Player(WIDTH // 2, GROUND_Y)
-    if not apply_fighter_spec(probe, spec):
+    if not apply_fighter_spec(probe, spec, quiet=True):   # probes must not log
         return None
     frames = probe.anims.get("idle") or probe.anims.get("run")
     if not frames:
