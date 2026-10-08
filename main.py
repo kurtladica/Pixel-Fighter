@@ -610,7 +610,7 @@ class Player:
         self.speed = spec.speed or MOVE_SPEED
         self.tint = spec.tint
         self.missing = []
-        for state, (pack, fname, dur) in ANIMS.items():
+        for state, (pack, fname, dur) in spec.sheets.items():
             if not os.path.exists(os.path.join(pack, fname)):
                 self.missing.append(fname)
             frames = build_anim(pack, fname, state)
@@ -646,6 +646,26 @@ class Player:
         log("special spent 50 meter (%.0f left)" % self.meter)
         return True
 
+    def attack_stats(self, state):
+        """Damage geometry for a move, with this fighter's tuning on top."""
+        base = ATTACKS_DEF.get(state)
+        if base is None:
+            return None
+        over = self.spec.attack_overrides.get(state) if self.spec else None
+        if not over:
+            return base
+        reach, height, damage, knock = base
+        return (over.get("reach", reach), over.get("height", height),
+                over.get("damage", damage), over.get("knock", knock))
+
+    def lunge_for(self, name):
+        """Forward step a move takes, retuned when this fighter overrides it."""
+        if self.spec:
+            value = self.spec.attack_overrides.get(name, {}).get("lunge")
+            if value is not None:
+                return value
+        return LUNGE.get(name, 0)
+
     def attack(self, name):
         """Start a move, or buffer the next one so attacks chain into combos."""
         if self.blocking or self.down_timer > 0:
@@ -663,7 +683,7 @@ class Player:
         if name == "counter":
             self.parry = PARRY_WINDOW
             log("parry window open for %d ticks" % PARRY_WINDOW)
-        step = LUNGE.get(name, 0)
+        step = self.lunge_for(name)
         if step:
             self.x = max(ARENA_LEFT, min(ARENA_RIGHT,
                                          self.x + (step if self.facing_right else -step)))
@@ -734,7 +754,7 @@ class Player:
                 nxt = self.buffer
                 self.buffer = None
                 if self._spend_for(nxt):
-                    step = LUNGE.get(nxt, 0)
+                    step = self.lunge_for(nxt)
                     self.begin(nxt)
                     play_sound("swing")
                     if step:
@@ -875,7 +895,7 @@ class Player:
             return None
         if self.connected:
             return None
-        floor, height, damage, knock = ATTACKS_DEF[self.state]
+        floor, height, damage, knock = self.attack_stats(self.state)
         if floor == 0:
             return None
 
@@ -1004,11 +1024,13 @@ class Player:
         self.tint = spec.tint
         self.hp = min(self.hp, self.max_hp)
         self.missing = []
-        for state, (fname, dur) in spec.sheets.items():
-            path = os.path.join(spec.folder, fname)
+        for state, entry in spec.sheets.items():
+            pack, fname, dur = entry if len(entry) == 3 \
+                else (spec.folder, entry[0], entry[1])
+            path = os.path.join(pack, fname)
             if not os.path.exists(path):
                 self.missing.append(fname)
-            self._set_anim(state, build_anim(spec.folder, fname, state,
+            self._set_anim(state, build_anim(pack, fname, state,
                                              spec.cell_w, spec.zoom), dur)
         self.set_state("idle")
         log("player character -> %s (%d sheets)" % (spec.label, len(spec.sheets)))
@@ -1393,7 +1415,8 @@ class CharacterSpec:
     """
 
     def __init__(self, key, label, folder, cell_w, zoom, sheets,
-                 body_w, body_h, tint=None, hp=None, speed=None):
+                 body_w, body_h, tint=None, hp=None, speed=None,
+                 attack_overrides=None):
         self.key = key
         self.label = label
         self.folder = folder
@@ -1405,6 +1428,8 @@ class CharacterSpec:
         self.tint = tint
         self.hp = hp                  # None -> PLAYER_MAX_HP
         self.speed = speed            # None -> MOVE_SPEED
+        # state -> {reach/height/damage/knock/lunge: value}, on top of ATTACKS_DEF
+        self.attack_overrides = attack_overrides or {}
 
     @property
     def exists(self):
@@ -1487,17 +1512,56 @@ RIVAL_ROSTER = tuple(
                   32, 2, _monster_sheets(prefix), 62, 120)
     for i, (folder, prefix, label) in enumerate(MONSTER_PACKS))
 
-_PROTO_SHEETS = {state: (fname, dur) for state, (_, fname, dur) in ANIMS.items()}
+def _proto_sheets(**overrides):
+    """Prototype animation map: state -> (pack, file, ticks), plus overrides.
 
-# Three builds of the same prototype: they share art but differ in palette,
-# health and walk speed so each one plays noticeably differently.
+    The stock prototype reads every state straight from ANIMS; a variant
+    swaps whole animations for sheets the base move set never touches, so
+    the same key plays a visibly different move.
+    """
+    sheets = {state: (pack, fname, dur)
+              for state, (pack, fname, dur) in ANIMS.items()}
+    sheets.update(overrides)
+    return sheets
+
+
+# Three builds of the same prototype, each with its own move set.
+# Stock is the baseline; the Striker trades power for reach and mobility;
+# the Tank gives up speed for single hits that hurt.
 PROTO_SPECS = (
-    CharacterSpec("prototype", "Prototype", PACK_HERO, CELL_W, ZOOM,
-                  _PROTO_SHEETS, 88, 148, None, 100, 5.0),
-    CharacterSpec("prototype_2", "Proto Mk II", PACK_HERO, CELL_W, ZOOM,
-                  _PROTO_SHEETS, 84, 148, (140, 255, 195), 85, 6.5),
-    CharacterSpec("prototype_3", "Proto Mk III", PACK_HERO, CELL_W, ZOOM,
-                  _PROTO_SHEETS, 96, 152, (255, 175, 95), 130, 4.0),
+    CharacterSpec(
+        "prototype", "Prototype", PACK_HERO, CELL_W, ZOOM,
+        _proto_sheets(), 88, 148, None, 100, 5.0),
+    CharacterSpec(
+        "prototype_2", "Mk II Striker", PACK_HERO, CELL_W, ZOOM,
+        _proto_sheets(
+            dodge=(PACK_PROTO, "Roll.png", 4),
+            jump_kick=(PACK_PROTO, "Jump witn Strike.png", 6),
+            slide_attack=(PACK_PROTO, "Crawl.png", 5),
+            charge=(PACK_PROTO, "Leap.png", 6),
+            double_jump=(PACK_PROTO, "Side_Jump.png", 6),
+        ),
+        84, 148, (140, 255, 195), 85, 6.5,
+        {
+            "jump_kick":    {"reach": 34, "height": 60, "damage": 15, "knock": 3},
+            "slide_attack": {"reach": 40, "height": 30, "damage": 9, "knock": 4},
+            "charge":       {"lunge": 26, "reach": 46, "damage": 16, "knock": 10},
+        }),
+    CharacterSpec(
+        "prototype_3", "Mk III Tank", PACK_HERO, CELL_W, ZOOM,
+        _proto_sheets(
+            block=(PACK_HERO, "Protect.png", 8),
+            jump_kick=(PACK_HERO, "Jump_Strike.png", 6),
+            charge=(PACK_HERO, "Ice_Charge.png", 6),
+            ground_slam=(PACK_PROTO, "Landing with Impact.png", 6),
+            wall_jump=(PACK_PROTO, "Upward Jump.png", 6),
+        ),
+        96, 152, (255, 175, 95), 130, 4.0,
+        {
+            "ground_slam": {"reach": 46, "height": 94, "damage": 26, "knock": 22},
+            "charge":      {"lunge": 10, "reach": 40, "damage": 28, "knock": 18},
+            "jump_kick":   {"reach": 32, "damage": 14, "knock": 8},
+        }),
 )
 
 PROTO_SPEC = PROTO_SPECS[0]

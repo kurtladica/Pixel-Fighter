@@ -93,13 +93,17 @@ also shown on that screen.
   guard so the hitbox drops to about 60% height and high swings pass overhead.
 - **Roster** — six playable fighters on 12 stages (cycle with `F3`): three builds of the
   prototype, then Blade, Ember and Frost. Three rival monster packs appear on the rival
-  side. The prototype builds share art but not stats:
+  side. The prototype builds share a body but not a move set — every key still works, the
+  move behind it changes:
 
-  | Fighter | HP | Speed | Palette |
-  |---|---|---|---|
-  | Prototype | 100 | 5.0 | stock blue |
-  | Proto Mk II | 85 | 6.5 | mint — fastest, fragilest |
-  | Proto Mk III | 130 | 4.0 | amber — tanky, slow |
+  | Fighter | HP | Speed | Signature moves | Palette |
+  |---|---|---|---|---|
+  | Prototype | 100 | 5.0 | the stock move set, untouched | stock blue |
+  | Mk II Striker | 85 | 6.5 | `S` dodge roll, `V` crawl slide, `1` leap charge (26-frame lunge), air `E` spin strike, `W` side jump — long, fast, fragile | mint |
+  | Mk III Tank | 130 | 4.0 | `Q` guarded stance, `T` landing slam (26 dmg, huge knockback), `1` ice charge, air `E` jump strike, wall `W` upward jump — slow, heavy hits | amber |
+
+  Each variant also retunes the moves it keeps, so `T` on the Tank hits for 26 with a
+  46-pixel reach while the Striker's `V` slide trades damage for a longer, lower poke.
 - **High score** — saved between sessions.
 
 ## Settings
