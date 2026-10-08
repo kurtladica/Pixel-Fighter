@@ -1,0 +1,46 @@
+Pixel Fighter - asset licenses
+==============================
+
+Most packs used in this project were obtained as FREE downloads from
+CraftPix.net. Per CraftPix's File Licenses page, a free download grants
+royalty-free usage in unlimited projects.
+
+CraftPix license terms: https://craftpix.net/file-licenses/
+
+Packs in this project
+---------------------
+1. assets/hero/       (26 sheets, 128px frames)
+   "Free 2D Pixel Prototype Character Pack 2"  (product id 607266)
+   Source: craftpix-net-607266-free-2d-pixel-prototype-character-pack-2
+   Used for: Punch_1, Punch_2, Kick, Dodge, Hurt and other combat animations.
+
+2. assets/hero_alt/   (33 sheets)
+   "Prototype Pixel Hero Free Sprite Pack 3"  (product id 196564)
+   Source: craftpix-net-196564-prototype-pixel-hero-free-sprite-pack-3
+   Used for: second character / enemy / RPG-style moves.
+
+3. assets/proto/      (25 sheets)
+   "Free Pixel Art Prototype Character Sprites"  (product id 405285)
+   Source: craftpix-net-405285-free-pixel-art-prototype-character-sprites
+   Used for: locomotion (idle, run, jump) and level objects.
+
+4. assets/graffiti/    (font/ 62 glyphs, decorations/, transitions/)
+   "Free Graffiti Constructor Pixel Art"  (craftpix-net-920510)
+   Source: craftpix-net-920510-free-graffiti-constructor-pixel-art
+   Used for: the PIXEL FIGHTER title wordmark (assets/graffiti/font).
+   Font itself is "Future Millennium", credited in assets/graffiti/Font.txt
+   (https://www.dafont.com/futuremillennium.font).
+   License: https://craftpix.net/file-licenses/
+
+5. assets/ui/kenney/   (740 png: bars, header plates, crosshairs)
+   "UI Pack: Sci-fi (2.0)" by Kenney
+   Source: kenney_ui-pack-space-expansion (folder archived in _source/)
+   Used for: health bars (track + fill), menu buttons, settings sliders,
+   and their soft drop shadows. Pack license file: CC0 1.0.
+   License: https://creativecommons.org/publicdomain/zero/1.0/
+
+Note
+----
+The original Licens.txt files shipped inside each pack contained only the URL
+https://craftpix.net/file-licenses/ and were replaced by this consolidated file
+during project reorganization. Keep this file with any build you distribute.

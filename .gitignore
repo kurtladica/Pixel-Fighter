@@ -1,0 +1,12 @@
+# runtime output - the game recreates this folder on launch
+/logs/
+
+# python
+__pycache__/
+*.py[cod]
+
+# raw asset packs and scratch art kept beside the project, not shipped
+/_source/
+/.freebuff/
+/craftpix-net-801184-free-clouds-pixel-art-asset-pack/
+/_kenney_contact_sheet.png
