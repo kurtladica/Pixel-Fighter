@@ -45,6 +45,7 @@ also shown on that screen.
 | `W` | Jump — press again for a double jump, hold to glide |
 | `S` | Dodge roll |
 | `Q` *(hold)* | Block / guard |
+| `Ctrl` *(hold)* | **Crouch guard** — same 25% damage behind a much smaller hitbox |
 
 ### Attacking
 
@@ -63,6 +64,8 @@ also shown on that screen.
 | `Z` | Counter / parry |
 | `X` | Riposte |
 | `B` | Cast spell |
+| `Y` | Throw |
+| `U` | Ability |
 | `1` | Charge attack |
 | `2` / `3` | Impact 1 / Impact 2 |
 | `H` | **Special** — costs 50 meter |
@@ -86,9 +89,17 @@ also shown on that screen.
   Press `H` to spend 50 of it on a special. The meter carries across rounds within a run
   and empties when you get knocked out.
 - **Defence** — blocking cuts incoming damage to 25%, a well-timed parry turns the hit
-  into a free riposte, and the dodge roll repositions you off the attack line.
-- **Roster** — four playable fighters (Prototype, Blade, Ember, Frost) and three rival
-  monster packs, on 12 stages (cycle with `F3`).
+  into a free riposte, the dodge roll repositions you, and holding `Ctrl` crouches the
+  guard so the hitbox drops to about 60% height and high swings pass overhead.
+- **Roster** — six playable fighters on 12 stages (cycle with `F3`): three builds of the
+  prototype, then Blade, Ember and Frost. Three rival monster packs appear on the rival
+  side. The prototype builds share art but not stats:
+
+  | Fighter | HP | Speed | Palette |
+  |---|---|---|---|
+  | Prototype | 100 | 5.0 | stock blue |
+  | Proto Mk II | 85 | 6.5 | mint — fastest, fragilest |
+  | Proto Mk III | 130 | 4.0 | amber — tanky, slow |
 - **High score** — saved between sessions.
 
 ## Settings

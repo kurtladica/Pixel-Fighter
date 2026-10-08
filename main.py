@@ -10,9 +10,10 @@ Sprite sheets are horizontal strips of 128px-wide cells. Cell height equals the
 sheet height, because some sheets are 64px tall and some are 128px tall.
 
 Current controls (also shown dynamically in the Controls screen):
-  A / D move; W jump/double jump/glide; S dodge; hold Q to block
+  A / D move; W jump/double jump/glide; S dodge; hold Q to block;
+  hold Ctrl to crouch - the guard stays up behind a smaller profile
   Mouse: left punch 1, middle hurt test, right punch 2
-  E/R/F/T/G/C/V/Z/X/B/1/2/3: combat moves
+  E/R/F/T/G/C/V/Z/X/B/Y/U/1/2/3: combat moves
   F1 debug, F2 event log, F3 development stage, ESC pause menu (quit from title)
 """
 import os
@@ -66,7 +67,7 @@ ATTACKS_DEF = {
     "impact1":   (24, 74, 17, 12),
     "impact2":   (24, 80, 23, 16),
     "special":   (36, 90, 26, 16),
-    "ability":   (0, 0, 0, 0),
+    "ability":   (28, 76, 17, 9),
     "dodge":  (0, 0, 0, 0),
     "hurt":   (0, 0, 0, 0),
 }
@@ -96,6 +97,8 @@ CONTROL_NAMES = {
     "riposte": "Riposte",
     "cast": "Cast spell",
     "charge": "Charge attack",
+    "throw": "Throw",
+    "ability": "Ability",
     "impact1": "Impact 1",
     "impact2": "Impact 2",
     "special": "Special  (costs 50 meter)",
@@ -120,6 +123,8 @@ KEY_ACTIONS = {
     pygame.K_2: "impact1",
     pygame.K_3: "impact2",
     pygame.K_h: "special",       # meter-powered signature move
+    pygame.K_y: "throw",
+    pygame.K_u: "ability",
 }
 
 # forward step when a move starts, so strings stay connected instead of
@@ -182,6 +187,7 @@ DEFAULT_BINDINGS: dict[str, int] = {
     "move_left": pygame.K_a,
     "move_right": pygame.K_d,
     "block": BLOCK_KEY,
+    "crouch_block": pygame.K_LCTRL,
     **{action: key for key, action in KEY_ACTIONS.items()},
     "debug": pygame.K_F1,
     "log": pygame.K_F2,
@@ -195,6 +201,7 @@ CONTROL_NAMES.update({
     "move_left": "Move left",
     "move_right": "Move right",
     "block": "Block / guard",
+    "crouch_block": "Crouch guard",
     "debug": "Debug information",
     "log": "Event log",
     "stage": "Next stage (development)",
@@ -291,6 +298,7 @@ ANIMS = {
     "jump_kick":    (PACK_HERO, "Jump_Kick.png", 5),
     "super_strike": (PACK_HERO, "Explosive_Strike.png", 5),
     "block":  (PACK_HERO, "Defensive_Stance.png", 10),
+    "crouch": (PACK_PROTO, "Crouch.png", 8),
     # the remaining combat animations from the pack
     "counter":   (PACK_HERO, "Counterattack.png", 4),
     "riposte":   (PACK_HERO, "Defense attack.png", 4),
@@ -566,6 +574,10 @@ class Player:
 
         self.reach_right = {}
         self.hp = PLAYER_MAX_HP
+        self.max_hp = PLAYER_MAX_HP
+        self.speed = MOVE_SPEED
+        self.tint = None
+        self.crouching = False
         self.blocking = False
         self.hit_vx = 0.0
         self.down_timer = 0
@@ -588,16 +600,24 @@ class Player:
         self.lock[state] = len(frames) * dur + 4
         self.reach_right[state] = measure_reach(frames)
 
-    def use_prototype(self):
-        """Load the original prototype hero's animation set."""
-        self.spec = PROTO_SPEC
-        self.body_w = PROTO_SPEC.body_w
-        self.body_h = PROTO_SPEC.body_h
+    def use_prototype(self, spec=None):
+        """Load a prototype variant: its palette, body and stats go with it."""
+        spec = spec or PROTO_SPEC
+        self.spec = spec
+        self.body_w = spec.body_w
+        self.body_h = spec.body_h
+        self.max_hp = spec.hp or PLAYER_MAX_HP
+        self.speed = spec.speed or MOVE_SPEED
+        self.tint = spec.tint
         self.missing = []
         for state, (pack, fname, dur) in ANIMS.items():
             if not os.path.exists(os.path.join(pack, fname)):
                 self.missing.append(fname)
-            self._set_anim(state, build_anim(pack, fname, state), dur)
+            frames = build_anim(pack, fname, state)
+            if spec.tint:
+                frames = [apply_tint(frame, spec.tint) for frame in frames]
+            self._set_anim(state, frames, dur)
+        self.hp = min(self.hp, self.max_hp)
 
     def set_state(self, s):
         if self.state != s:
@@ -674,7 +694,7 @@ class Player:
         if self.down_timer > 0:
             self.down_timer -= 1
             if self.down_timer == 0:
-                self.hp = PLAYER_MAX_HP
+                self.hp = self.max_hp
                 self.x = WIDTH // 2
                 self.y = GROUND_Y
                 self.vx = self.vy = self.hit_vx = 0
@@ -729,24 +749,29 @@ class Player:
         if self.block_flash > 0:
             self.block_flash -= 1
 
-        # Hold the configured guard key to block.
+        # Hold the configured guard key to block; Ctrl crouches that guard.
         can_block = self.on_ground and not busy
-        self.blocking = bool(keys[bindings["block"]]) and can_block
+        crouch_key = bindings.get("crouch_block")
+        held_crouch = bool(crouch_key is not None) and bool(keys[crouch_key])
+        self.crouching = held_crouch and can_block
+        self.blocking = (bool(keys[bindings["block"]]) or self.crouching) \
+            and can_block
 
         self.vx = 0
         if not busy and not self.blocking:
             if keys[bindings["move_left"]]:
-                self.vx = -MOVE_SPEED
+                self.vx = -self.speed
                 self.facing_right = False
             if keys[bindings["move_right"]]:
-                self.vx = MOVE_SPEED
+                self.vx = self.speed
                 self.facing_right = True
             if self.vx:
                 self.move_ticks += 1
             else:
                 self.move_ticks = 0
             if self.move_ticks > SPEED_RUN_AFTER:
-                self.vx = SPEED_RUN_BOOST if self.vx > 0 else -SPEED_RUN_BOOST
+                sprint = self.speed + (SPEED_RUN_BOOST - MOVE_SPEED)
+                self.vx = sprint if self.vx > 0 else -sprint
 
         # knockback from a hit the player failed to block
         if abs(self.hit_vx) > 0.1:
@@ -781,7 +806,7 @@ class Player:
 
         if not busy:
             if self.blocking:
-                self.set_state("block")
+                self.set_state("crouch" if self.crouching else "block")
             elif self.land_lock > 0:
                 pass
             elif not self.on_ground:
@@ -868,9 +893,16 @@ class Player:
         return rect, damage, knock
 
     def body(self):
-        """Rect the dummy's hitbox must overlap to hit us."""
-        return pygame.Rect(self.x - self.body_w / 2, self.y - self.body_h,
-                           self.body_w, self.body_h)
+        """Rect the dummy's hitbox must overlap to hit us.
+
+        Crouching drops the top of the box toward the feet, so swings aimed
+        high enough to clear it simply pass over us instead of landing.
+        """
+        width, height = self.body_w, self.body_h
+        if self.crouching:
+            height = max(1, int(height * 0.62))
+            width = max(1, int(width * 0.9))
+        return pygame.Rect(self.x - width / 2, self.y - height, width, height)
 
     def take_damage(self, amount, from_x, knock, texts):
         """Apply a hit from the dummy: parry, block, or take it."""
@@ -903,7 +935,7 @@ class Player:
             direction = 1 if self.x >= from_x else -1
             self.hit_vx = knock * direction
             log("hit player for %d -> hp %d/%d"
-                % (dmg, self.hp, PLAYER_MAX_HP))
+                % (dmg, self.hp, self.max_hp))
             texts.append(FloatingText(self.x, self.y - 232, "-%d" % dmg,
                                        (255, 90, 90)))
             if self.state not in ATTACKS or self.state_time >= self.lock[self.state]:
@@ -927,9 +959,9 @@ class Player:
 
     def draw_health(self, screen, font):
         x, y, w, h = HUD_X, HUD_BAR_Y, HUD_W, HUD_BAR_H
-        ratio = max(0, self.hp) / PLAYER_MAX_HP
+        ratio = max(0, self.hp) / max(1, self.max_hp)
         draw_health_bar(screen, x, y, w, h, ratio)
-        label = outlined_text(font, "PLAYER %d/%d" % (max(0, self.hp), PLAYER_MAX_HP),
+        label = outlined_text(font, "PLAYER %d/%d" % (max(0, self.hp), self.max_hp),
                                (245, 245, 245))
         screen.blit(label, (x, HUD_LABEL_Y))
         self.draw_meter(screen, font)
@@ -967,6 +999,10 @@ class Player:
         self.spec = spec
         self.body_w = spec.body_w
         self.body_h = spec.body_h
+        self.max_hp = spec.hp or PLAYER_MAX_HP
+        self.speed = spec.speed or MOVE_SPEED
+        self.tint = spec.tint
+        self.hp = min(self.hp, self.max_hp)
         self.missing = []
         for state, (fname, dur) in spec.sheets.items():
             path = os.path.join(spec.folder, fname)
@@ -1357,7 +1393,7 @@ class CharacterSpec:
     """
 
     def __init__(self, key, label, folder, cell_w, zoom, sheets,
-                 body_w, body_h, tint=None):
+                 body_w, body_h, tint=None, hp=None, speed=None):
         self.key = key
         self.label = label
         self.folder = folder
@@ -1367,6 +1403,8 @@ class CharacterSpec:
         self.body_w = body_w
         self.body_h = body_h
         self.tint = tint
+        self.hp = hp                  # None -> PLAYER_MAX_HP
+        self.speed = speed            # None -> MOVE_SPEED
 
     @property
     def exists(self):
@@ -1400,6 +1438,7 @@ def _hero_sheets(prefix, special="Attack2"):
         "throw": g("Attack2"), "impact1": g("WalkAttack2"),
         "impact2": g("RunAttack2"), "ability": g("Attack1"),
         "dodge": g("Squat"), "block": g("Squat"), "hurt": g("Hurt"),
+        "crouch": g("Squat"),
     }
 
 
@@ -1422,6 +1461,7 @@ def _monster_sheets(prefix):
         "throw": g("Throw_4"), "impact1": g("Attack2_6"),
         "impact2": g("Attack2_6"), "ability": g("Push_6"),
         "dodge": g("Climb_4"), "block": g("Push_6"), "hurt": g("Hurt_4"),
+        "crouch": g("Push_6"),
     }
 
 
@@ -1447,10 +1487,21 @@ RIVAL_ROSTER = tuple(
                   32, 2, _monster_sheets(prefix), 62, 120)
     for i, (folder, prefix, label) in enumerate(MONSTER_PACKS))
 
-PROTO_SPEC = CharacterSpec(
-    "prototype", "Prototype", PACK_HERO, CELL_W, ZOOM,
-    {state: (fname, dur) for state, (_, fname, dur) in ANIMS.items()},
-    88, 148)
+_PROTO_SHEETS = {state: (fname, dur) for state, (_, fname, dur) in ANIMS.items()}
+
+# Three builds of the same prototype: they share art but differ in palette,
+# health and walk speed so each one plays noticeably differently.
+PROTO_SPECS = (
+    CharacterSpec("prototype", "Prototype", PACK_HERO, CELL_W, ZOOM,
+                  _PROTO_SHEETS, 88, 148, None, 100, 5.0),
+    CharacterSpec("prototype_2", "Proto Mk II", PACK_HERO, CELL_W, ZOOM,
+                  _PROTO_SHEETS, 84, 148, (140, 255, 195), 85, 6.5),
+    CharacterSpec("prototype_3", "Proto Mk III", PACK_HERO, CELL_W, ZOOM,
+                  _PROTO_SHEETS, 96, 152, (255, 175, 95), 130, 4.0),
+)
+
+PROTO_SPEC = PROTO_SPECS[0]
+PROTO_KEYS = frozenset(spec.key for spec in PROTO_SPECS)
 
 
 _kenney_cache = {}
@@ -1875,15 +1926,15 @@ class GameState:
 
 def cycle_player_character(player: Player, step=1) -> None:
     """Step through the player roster: the prototype plus three tiny heroes."""
-    roster = [PROTO_SPEC] + list(PLAYER_ROSTER)
+    roster = list(PROTO_SPECS) + list(PLAYER_ROSTER)
     names = [spec.key for spec in roster]
     current = player.spec.key if player.spec is not None else names[0]
     index = names.index(current) if current in names else 0
     spec = roster[(index + step) % len(roster)]
-    if spec.key == PROTO_SPEC.key:
-        player.use_prototype()
+    if spec.key in PROTO_KEYS:
+        player.use_prototype(spec)
         player.set_state("idle")
-        log("player character -> Prototype")
+        log("player character -> %s" % spec.label)
         return
     player.set_character(spec)
 
@@ -1897,7 +1948,7 @@ def cycle_rival_character(dummy: Dummy, step=1) -> None:
 
 
 #: Fighters the title screen lets you pick: the prototype plus the tiny heroes.
-SELECTABLE_FIGHTERS = (PROTO_SPEC,) + tuple(PLAYER_ROSTER)
+SELECTABLE_FIGHTERS = tuple(PROTO_SPECS) + tuple(PLAYER_ROSTER)
 
 _FIGHTER_PREVIEW: dict = {}
 
@@ -1915,8 +1966,8 @@ def apply_fighter_spec(player: Player, spec) -> bool:
     """Equip one roster fighter, ignoring entries whose art is missing."""
     if spec is None or not spec.exists:
         return False
-    if spec.key == PROTO_SPEC.key:
-        player.use_prototype()
+    if spec.key in PROTO_KEYS:
+        player.use_prototype(spec)
         player.set_state("idle")
         return True
     return player.set_character(spec)
@@ -1972,10 +2023,11 @@ def restart_arcade(player: Player, dummy: Dummy, texts: list, state: GameState) 
 
 SETTINGS_CATEGORIES = ("AUDIO", "DISPLAY", "GAMEPLAY", "ACCESSIBILITY")
 CONTROL_ORDER = (
-    "move_left", "move_right", "jump", "dodge", "block", "special",
+    "move_left", "move_right", "jump", "dodge", "block", "crouch_block", "special",
     "kick", "fire_kick",
     "power_strike", "ground_slam", "super_strike", "ice_strike", "slide_attack",
-    "counter", "riposte", "cast", "charge", "impact1", "impact2", "debug", "log",
+    "counter", "riposte", "cast", "charge", "throw", "ability",
+    "impact1", "impact2", "debug", "log",
     "stage", "pause", "quit",
 )
 
@@ -2098,11 +2150,13 @@ FIGHTER_CARD_TOP = 118
 
 def fighter_card_rect(index: int) -> pygame.Rect:
     """Shared geometry so keyboard focus and mouse clicks agree on a card."""
-    count = len(SELECTABLE_FIGHTERS)
-    total = count * FIGHTER_CARD_W + (count - 1) * FIGHTER_CARD_GAP
+    count = max(1, len(SELECTABLE_FIGHTERS))
+    gap = 14
+    width = min(FIGHTER_CARD_W, (872 - 40 - gap * (count - 1)) // count)
+    total = count * width + gap * (count - 1)
     x0 = (WIDTH - total) // 2
-    return pygame.Rect(x0 + index * (FIGHTER_CARD_W + FIGHTER_CARD_GAP),
-                       FIGHTER_CARD_TOP, FIGHTER_CARD_W, FIGHTER_CARD_H)
+    return pygame.Rect(x0 + index * (width + gap),
+                       FIGHTER_CARD_TOP, width, FIGHTER_CARD_H)
 
 
 def controls_rows() -> list[str]:
@@ -2121,7 +2175,7 @@ def controls_rows() -> list[str]:
 
 def control_row_rect(index: int) -> pygame.Rect:
     """Place all bindings into three in-panel columns."""
-    column, row = divmod(index, 9)
+    column, row = divmod(index, 10)
     return pygame.Rect(72 + column * 276, 134 + row * 31, 264, 26)
 
 
@@ -2378,7 +2432,8 @@ def handle_menu_event(event: pygame.event.Event, player: Player, dummy: Dummy,
 
 
 # bindings that are handled by the menu/UI code instead of being combat actions
-NON_COMBAT_BINDINGS = ("move_left", "move_right", "block", "debug", "log", "stage",
+NON_COMBAT_BINDINGS = ("move_left", "move_right", "block", "crouch_block",
+                       "debug", "log", "stage",
                        "pause", "quit", "hero", "monster")
 
 
@@ -2742,6 +2797,7 @@ def tutorial_sections(state: GameState) -> list[tuple[str, list[str]]]:
         ]),
         ("DEFENCE", [
             f"Hold {key('block')} while grounded and free to block; blocked hits deal one quarter damage.",
+            f"Hold {key('crouch_block')} instead for a crouching guard: same protection behind a much smaller hitbox.",
             f"{key('counter')} opens a {PARRY_WINDOW}-tick parry window. A successful parry starts a riposte.",
         ]),
         ("COMBAT FEEDBACK", [
@@ -3023,8 +3079,9 @@ def draw_menu_overlay(screen: pygame.Surface, font: pygame.font.Font,
                 badge = outlined_text(small, "SELECTED", (120, 230, 170))
                 screen.blit(badge, badge.get_rect(center=(card.centerx, card.y + 14)))
         spec = SELECTABLE_FIGHTERS[state.menu_index % len(SELECTABLE_FIGHTERS)]
-        info = "BODY %dx%d     ART %dPX     READY" % (
-            spec.body_w, spec.body_h, spec.cell_w)
+        info = "BODY %dx%d   ART %dPX   HP %d   SPEED %.1f   READY" % (
+            spec.body_w, spec.body_h, spec.cell_w,
+            spec.hp or PLAYER_MAX_HP, spec.speed or MOVE_SPEED)
         image = outlined_text(small, info, muted)
         screen.blit(image, image.get_rect(center=(WIDTH // 2, 402)))
         hint = "LEFT / RIGHT  SELECT      ENTER  CONFIRM      ESC  BACK"
