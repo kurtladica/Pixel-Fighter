@@ -15,9 +15,20 @@ Current controls (also shown dynamically in the Controls screen):
   Mouse: left punch 1, middle hurt test, right punch 2
   E/R/F/T/G/C/V/Z/X/B/Y/U/1/2/3: combat moves
   F1 debug, F2 event log, F3 development stage, ESC pause menu (quit from title)
+
+Pre-fight flow (START ARCADE on the title, or RESTART RUN while playing):
+  roster showcase -> stage grid -> round count (best of 1 / 2 / 3) -> 3-2-1 FIGHT!
+  Arrows move, ENTER confirms, ESC steps back one screen. The chosen stage and round
+  count stick for the whole run; rounds are scored first-to-N inside the fight.
+
+Stage art notes:
+  Castle_1 / Castle_2 ship their hedge-and-grass band as its own layer, which reads as
+  a stray tile set beside the masonry, so SKIP_LAYERS drops those layers. Ocean stages
+  get a CloudLayer of procedurally drawn clouds that drift behind the scenery.
 """
 import os
 import json
+import math
 import random
 import time
 from pathlib import Path
@@ -1720,8 +1731,78 @@ LAYER_ORDER = {
     "Castle_4": [0, 1, 2, 3],
 }
 
+# The castle pack ships a bright green hedge/grass band as its own layer. It
+# reads as a stray tile set next to the stone floor, so those layers are left
+# out of the stack and the stages keep their masonry.
+SKIP_LAYERS = {
+    "Castle_1": (2,),
+    "Castle_2": (1,),
+}
+
+COUNTDOWN_NUMBERS = 3
+COUNTDOWN_TICKS = 60          # one second per number at 60 ticks
+FIGHT_TICKS = 92
+COUNTDOWN_TOTAL = COUNTDOWN_NUMBERS * COUNTDOWN_TICKS + FIGHT_TICKS
+COUNTDOWN_COLORS = ((255, 118, 96), (255, 202, 92), (122, 255, 176))
+FIGHT_COLOR = (255, 236, 168)
+
+_SKY_STAGES = ("Ocean",)
+
 
 _background_cache = {}
+
+
+def _make_cloud(width, height, rng):
+    """Draw one soft pixel cloud into a fresh transparent surface."""
+    surf = pygame.Surface((width, height), pygame.SRCALPHA)
+    lobes = 4 + rng.randint(0, 3)
+    for i in range(lobes):
+        t = i / max(1, lobes - 1)
+        cx = int(width * (0.16 + 0.68 * t)) + rng.randint(-8, 8)
+        cy = int(height * 0.52) + rng.randint(-10, 10)
+        rw = rng.randint(max(24, width // 5), max(34, width // 3))
+        rh = rng.randint(max(20, height // 3), max(30, int(height * 0.75)))
+        pygame.draw.ellipse(surf, (255, 255, 255, 242),
+                            (cx - rw // 2, cy - rh // 2, rw, rh))
+    pygame.draw.ellipse(surf, (248, 251, 255, 236),
+                        (int(width * 0.06), int(height * 0.52),
+                         int(width * 0.88), int(height * 0.46)))
+    pygame.draw.ellipse(surf, (206, 222, 246, 214),
+                        (int(width * 0.16), int(height * 0.70),
+                         int(width * 0.68), int(height * 0.30)))
+    return surf
+
+
+class CloudLayer:
+    """Clouds drifting across open sky so the background never sits still."""
+
+    def __init__(self, seed=11, count=7):
+        rng = random.Random(seed)
+        self.rng = rng
+        self.clouds = []
+        for _ in range(count):
+            width = rng.randint(150, 320)
+            height = rng.randint(56, 110)
+            self.clouds.append({
+                "img": _make_cloud(width, height, rng),
+                "x": float(rng.randint(-240, WIDTH)),
+                "y": float(rng.randint(4, 300 - height // 2)),
+                "speed": 0.14 + rng.random() * 0.42,
+                "alpha": rng.randint(130, 215),
+            })
+
+    def update(self):
+        """Drift right and wrap around when a cloud leaves the frame."""
+        for cloud in self.clouds:
+            cloud["x"] += cloud["speed"]
+            if cloud["x"] > WIDTH + 40:
+                cloud["x"] = -cloud["img"].get_width() - self.rng.randint(0, 260)
+                cloud["y"] = float(self.rng.randint(4, 280))
+
+    def draw(self, screen):
+        for cloud in self.clouds:
+            cloud["img"].set_alpha(cloud["alpha"])
+            screen.blit(cloud["img"], (int(cloud["x"]), int(cloud["y"])))
 
 
 class Background:
@@ -1730,12 +1811,14 @@ class Background:
     def __init__(self, folder):
         if folder in _background_cache:
             self.folder, self.name, self.layers = _background_cache[folder]
+            self.clouds = CloudLayer() if self._sky() else None
             return
         self.folder = folder
         self.name = os.path.basename(folder)
         self.layers = []
         if not os.path.isdir(folder):
             _background_cache[folder] = (self.folder, self.name, self.layers)
+            self.clouds = None
             return
         files = {}
         for filename in os.listdir(folder):
@@ -1747,12 +1830,17 @@ class Background:
                 continue
             files[number] = os.path.join(folder, filename)
         order = LAYER_ORDER.get(self.name, sorted(files))
+        skip = SKIP_LAYERS.get(self.name, ())
         for num in order:
-            if num not in files:
+            if num not in files or num in skip:
                 continue
             img = pygame.image.load(files[num]).convert_alpha()
             self.layers.append(pygame.transform.scale(img, (WIDTH, HEIGHT)))
         _background_cache[folder] = (self.folder, self.name, self.layers)
+        self.clouds = CloudLayer() if self._sky() else None
+
+    def _sky(self):
+        return any(self.name.startswith(prefix) for prefix in _SKY_STAGES)
 
     @property
     def ok(self):
@@ -1779,8 +1867,12 @@ def draw_name_tag(screen, font, x, text, color):
 
 def draw_stage(screen, background=None):
     if background is not None and background.ok:
-        for layer in background.layers:
+        clouds = getattr(background, "clouds", None)
+        for index, layer in enumerate(background.layers):
             screen.blit(layer, (0, 0))
+            if clouds is not None and index == 0:   # sit on the sky, behind scenery
+                clouds.update()
+                clouds.draw(screen)
     else:
         for y in range(0, GROUND_Y, 40):
             shade = 34 + (y // 40) * 4
@@ -1975,6 +2067,11 @@ class GameState:
     menu_screen: str = "game"
     menu_origin: str = "pause"
     menu_index: int = 0
+    match_rounds: int = 1            # rounds per fight: first to this many wins
+    round_no: int = 1                # round inside the current fight
+    player_rounds: int = 0           # rounds taken by the player this fight
+    rival_rounds: int = 0            # rounds taken by the rival this fight
+    countdown: int = 0               # ticks left of the 3-2-1 intro, 0 = fighting
     settings_category: int = 0
     rebind_action: Optional[str] = None
     dialog_action: Optional[str] = None
@@ -2067,22 +2164,49 @@ def fighter_preview(spec) -> Optional[pygame.Surface]:
     return image
 
 
+def reset_fighters(player: Player, dummy: Dummy, texts: list,
+                   state: GameState) -> None:
+    """Fresh health, both corners, and the 3-2-1 intro for the next round."""
+    spec = player.spec
+    Player.__init__(player, WIDTH // 2, GROUND_Y)
+    if spec is not None:
+        apply_fighter_spec(player, spec)
+    Dummy.__init__(dummy, 660, GROUND_Y)
+    index = min(max(0, state.challenge.rounds_won), len(ARCADE_RIVALS) - 1)
+    dummy.set_rival(*ARCADE_RIVALS[index])
+    texts.clear()
+    state.hitstop = 0
+    state.shake_frames = 0
+    state.countdown = COUNTDOWN_TOTAL
+
+
 def restart_arcade(player: Player, dummy: Dummy, texts: list, state: GameState) -> None:
     """Start a fresh run while keeping the saved high score and chosen fighter."""
     best = state.challenge.high_score
-    chosen = player.spec
-    Player.__init__(player, WIDTH // 2, GROUND_Y)
-    if chosen is not None:
-        apply_fighter_spec(player, chosen)
-    Dummy.__init__(dummy, 660, GROUND_Y)
-    dummy.set_rival(*ARCADE_RIVALS[0])
-    texts.clear()
     state.challenge = ArcadeChallenge(high_score=best)
-    state.hitstop = 0
     state.scene_index = state.default_scene_index
     if state.scenes:
-        state.background = state.background_cache.get(state.scenes[state.scene_index])
-    state.shake_frames = 0
+        path = state.scenes[state.scene_index]
+        background = state.background_cache.get(path)
+        if background is None:
+            background = Background(path)
+            state.background_cache[path] = background
+        state.background = background
+    state.player_rounds = 0
+    state.rival_rounds = 0
+    state.round_no = 1
+    reset_fighters(player, dummy, texts, state)
+
+
+def start_run(player: Player, dummy: Dummy, texts: list, state: GameState,
+              stage_index: Optional[int] = None,
+              match_rounds: Optional[int] = None) -> None:
+    """Begin a run with the map and round count picked on the pre-fight menu."""
+    if stage_index is not None and state.scenes:
+        state.default_scene_index = max(0, min(len(state.scenes) - 1, stage_index))
+    if match_rounds is not None:
+        state.match_rounds = max(1, min(3, match_rounds))
+    restart_arcade(player, dummy, texts, state)
 
 
 SETTINGS_CATEGORIES = ("AUDIO", "DISPLAY", "GAMEPLAY", "ACCESSIBILITY")
@@ -2223,6 +2347,66 @@ def fighter_card_rect(index: int) -> pygame.Rect:
                        FIGHTER_CARD_TOP, width, FIGHTER_CARD_H)
 
 
+STAGE_CARD_COLS = 4
+
+
+def roster_card_rect(index: int) -> pygame.Rect:
+    """Small grid card on the roster showcase."""
+    gap = 12
+    cols, rows = 2, 3
+    card_w = (896 - 496 - gap) // cols
+    card_h = (300 - gap * (rows - 1)) // rows
+    col, row = index % cols, index // cols
+    return pygame.Rect(496 + col * (card_w + gap), 86 + row * (card_h + gap),
+                       card_w, card_h)
+
+
+def round_card_rect(index: int) -> pygame.Rect:
+    """Wide option bar on the round-count screen."""
+    return pygame.Rect(140, 128 + index * 100, 680, 84)
+
+
+def stage_card_rect(index: int) -> pygame.Rect:
+    """Grid cell for one map on the stage-select screen."""
+    gap = 14
+    width = (872 - 40 - gap * (STAGE_CARD_COLS - 1)) // STAGE_CARD_COLS
+    height = 106
+    col, row = index % STAGE_CARD_COLS, index // STAGE_CARD_COLS
+    return pygame.Rect(64 + col * (width + gap), 96 + row * (height + gap),
+                       width, height)
+
+
+_STAGE_THUMBS: dict = {}
+
+
+def stage_thumbnail(folder, size):
+    """Pre-render a tiny picture of a stage for the map picker."""
+    key = (folder, size)
+    cached = _STAGE_THUMBS.get(key)
+    if cached is not None:
+        return cached
+    thumb = pygame.Surface(size, pygame.SRCALPHA)
+    name = os.path.basename(folder)
+    if os.path.isdir(folder):
+        files = {}
+        for filename in os.listdir(folder):
+            if not filename.lower().endswith(".png"):
+                continue
+            try:
+                number = int(os.path.splitext(filename)[0])
+            except ValueError:
+                continue
+            files[number] = os.path.join(folder, filename)
+        skip = SKIP_LAYERS.get(name, ())
+        for number in LAYER_ORDER.get(name, sorted(files)):
+            if number not in files or number in skip:
+                continue
+            image = pygame.image.load(files[number]).convert_alpha()
+            thumb.blit(pygame.transform.smoothscale(image, size), (0, 0))
+    _STAGE_THUMBS[key] = thumb
+    return thumb
+
+
 def controls_rows() -> list[str]:
     """List every keyboard action while leaving the original mouse map intact.
 
@@ -2245,7 +2429,8 @@ def control_row_rect(index: int) -> pygame.Rect:
 
 def show_menu(state: GameState, screen: str) -> None:
     """Open a menu page and remember whether it belongs to pause or title."""
-    if screen in ("settings", "controls", "howto", "fighters"):
+    if screen in ("settings", "controls", "howto", "fighters",
+                  "roster", "stages", "rounds"):
         state.menu_origin = "pause" if state.menu_screen == "pause" else "title"
     state.menu_screen = screen
     state.menu_index = 0
@@ -2309,8 +2494,8 @@ def activate_menu_item(name: str, player: Player, dummy: Dummy,
     elif name == "QUIT TO MAIN MENU":
         open_confirmation(state, "quit_menu")
     elif name == "START ARCADE":
-        restart_arcade(player, dummy, texts, state)
-        leave_menu_for_game(state)
+        show_menu(state, "roster")
+        state.menu_index = fighter_index(player)
     elif name == "SELECT FIGHTER":
         show_menu(state, "fighters")
         state.menu_index = fighter_index(player)
@@ -2374,6 +2559,14 @@ def handle_menu_event(event: pygame.event.Event, player: Player, dummy: Dummy,
         if event.key == pygame.K_ESCAPE:
             if screen == "pause":
                 leave_menu_for_game(state)
+            elif screen == "roster":
+                back_from_submenu(state)
+            elif screen == "stages":
+                show_menu(state, "roster")
+                state.menu_index = fighter_index(player)
+            elif screen == "rounds":
+                show_menu(state, "stages")
+                state.menu_index = state.scene_index % max(1, len(state.scenes))
             elif screen in ("settings", "controls", "howto", "fighters"):
                 back_from_submenu(state)
             return
@@ -2398,6 +2591,45 @@ def handle_menu_event(event: pygame.event.Event, player: Player, dummy: Dummy,
                 apply_fighter(player, state.menu_index)
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                 back_from_submenu(state)
+            return
+        if screen == "roster":
+            count = max(1, len(SELECTABLE_FIGHTERS))
+            moving = (pygame.K_LEFT, pygame.K_RIGHT, pygame.K_UP, pygame.K_DOWN,
+                      pygame.K_a, pygame.K_d, pygame.K_w, pygame.K_s)
+            if event.key in moving:
+                step = -1 if event.key in (pygame.K_LEFT, pygame.K_UP,
+                                           pygame.K_a, pygame.K_w) else 1
+                state.menu_index = (state.menu_index + step) % count
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                apply_fighter(player, state.menu_index)
+                show_menu(state, "stages")
+                state.menu_index = state.scene_index % max(1, len(state.scenes))
+            return
+        if screen == "stages":
+            count = max(1, len(state.scenes))
+            moving = (pygame.K_LEFT, pygame.K_RIGHT, pygame.K_UP, pygame.K_DOWN,
+                      pygame.K_a, pygame.K_d, pygame.K_w, pygame.K_s)
+            if event.key in moving:
+                step = -1 if event.key in (pygame.K_LEFT, pygame.K_UP,
+                                           pygame.K_a, pygame.K_w) else 1
+                state.menu_index = (state.menu_index + step) % count
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                if state.scenes:
+                    state.scene_index = state.menu_index
+                    state.default_scene_index = state.menu_index
+                show_menu(state, "rounds")
+                state.menu_index = max(0, min(2, state.match_rounds - 1))
+            return
+        if screen == "rounds":
+            if event.key in (pygame.K_LEFT, pygame.K_UP, pygame.K_a, pygame.K_w):
+                state.menu_index = (state.menu_index - 1) % 3
+            elif event.key in (pygame.K_RIGHT, pygame.K_DOWN, pygame.K_d, pygame.K_s):
+                state.menu_index = (state.menu_index + 1) % 3
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                start_run(player, dummy, texts, state,
+                          stage_index=state.scene_index,
+                          match_rounds=state.menu_index + 1)
+                leave_menu_for_game(state)
             return
         if screen == "settings":
             rows = settings_rows(state)
@@ -2484,6 +2716,41 @@ def handle_menu_event(event: pygame.event.Event, player: Player, dummy: Dummy,
             if fighter_card_rect(index).collidepoint(pos):
                 state.menu_index = index
                 apply_fighter(player, index)
+                return
+    elif screen == "roster":
+        for index in range(len(SELECTABLE_FIGHTERS)):
+            if roster_card_rect(index).collidepoint(pos):
+                if state.menu_index == index:      # second click confirms
+                    apply_fighter(player, index)
+                    show_menu(state, "stages")
+                    state.menu_index = state.scene_index % max(1, len(state.scenes))
+                else:
+                    state.menu_index = index
+                    apply_fighter(player, index)
+                return
+    elif screen == "stages":
+        if not state.scenes:
+            return
+        for index in range(len(state.scenes)):
+            if stage_card_rect(index).collidepoint(pos):
+                if state.menu_index == index:
+                    state.scene_index = index
+                    state.default_scene_index = index
+                    show_menu(state, "rounds")
+                    state.menu_index = max(0, min(2, state.match_rounds - 1))
+                else:
+                    state.menu_index = index
+                return
+    elif screen == "rounds":
+        for index in range(3):
+            if round_card_rect(index).collidepoint(pos):
+                if state.menu_index == index:
+                    start_run(player, dummy, texts, state,
+                              stage_index=state.scene_index,
+                              match_rounds=index + 1)
+                    leave_menu_for_game(state)
+                else:
+                    state.menu_index = index
                 return
     elif screen == "howto":
         if pygame.Rect(766, 460, 112, 32).collidepoint(pos):
@@ -2602,6 +2869,9 @@ def update(player: Player, dummy: Dummy, texts: list, state: GameState) -> None:
     """Advance one fixed simulation tick, preserving combat update order."""
     if state.menu_screen != "game" or state.challenge.finished:
         return
+    if state.countdown > 0:            # 3-2-1: nobody moves until it lands
+        state.countdown -= 1
+        return
 
     if state.notice_timer > 0:
         state.notice_timer -= 1
@@ -2638,13 +2908,24 @@ def update(player: Player, dummy: Dummy, texts: list, state: GameState) -> None:
             if state.settings.values["screen_shake"]:
                 state.shake_frames = max(state.shake_frames, 5)
             if not dummy.alive:
-                state.challenge.win_round(player)
-                save_high_score(state.challenge)
-                log("ARCADE ROUND %d/%d SCORE +%d TOTAL %d"
-                    % (state.challenge.rounds_won, state.challenge.rounds_total,
-                       state.challenge.last_award, state.challenge.score))
-                if not state.challenge.finished:
-                    dummy.set_rival(*ARCADE_RIVALS[state.challenge.rounds_won])
+                state.player_rounds += 1
+                log("ROUND WON  %d-%d of %d"
+                    % (state.player_rounds, state.rival_rounds, state.match_rounds))
+                if state.player_rounds >= state.match_rounds:
+                    state.challenge.win_round(player)
+                    save_high_score(state.challenge)
+                    log("ARCADE ROUND %d/%d SCORE +%d TOTAL %d"
+                        % (state.challenge.rounds_won, state.challenge.rounds_total,
+                           state.challenge.last_award, state.challenge.score))
+                    state.player_rounds = 0
+                    state.rival_rounds = 0
+                    state.round_no = 1
+                    if not state.challenge.finished:
+                        dummy.set_rival(*ARCADE_RIVALS[state.challenge.rounds_won])
+                        reset_fighters(player, dummy, texts, state)
+                else:
+                    state.round_no += 1
+                    reset_fighters(player, dummy, texts, state)
             state.hitstop = 9 if move in ("ground_slam", "special") else 5
             player.x += 4 if player.facing_right else -4
 
@@ -2657,10 +2938,22 @@ def update(player: Player, dummy: Dummy, texts: list, state: GameState) -> None:
             if state.settings.values["screen_shake"]:
                 state.shake_frames = max(state.shake_frames, 4)
             if player.down_timer > 0:
-                state.challenge.lose_life()
-                save_high_score(state.challenge)
-                log("ARCADE LIVES %d SCORE %d"
-                    % (state.challenge.lives, state.challenge.score))
+                state.rival_rounds += 1
+                log("ROUND LOST  %d-%d of %d"
+                    % (state.player_rounds, state.rival_rounds, state.match_rounds))
+                if state.rival_rounds >= state.match_rounds:
+                    state.challenge.lose_life()
+                    save_high_score(state.challenge)
+                    log("ARCADE LIVES %d SCORE %d"
+                        % (state.challenge.lives, state.challenge.score))
+                    state.player_rounds = 0
+                    state.rival_rounds = 0
+                    state.round_no = 1
+                    if not state.challenge.finished:
+                        reset_fighters(player, dummy, texts, state)
+                else:
+                    state.round_no += 1
+                    reset_fighters(player, dummy, texts, state)
             state.hitstop = 4
 
     if state.shake_frames > 0:
@@ -3152,6 +3445,118 @@ def draw_menu_overlay(screen: pygame.Surface, font: pygame.font.Font,
         image = outlined_text(small, hint, muted)
         screen.blit(image, image.get_rect(center=(WIDTH // 2, 478)))
 
+    elif state.menu_screen == "roster":
+        rect = pygame.Rect(44, 27, 872, 486)
+        draw_ui_panel(screen, rect, state)
+        screen.blit(outlined_text(font, "CHOOSE YOUR FIGHTER", accent), (74, 45))
+        step = outlined_text(small, "STEP 1 OF 3", muted)
+        screen.blit(step, (rect.right - 40 - step.get_width(), 49))
+
+        spec = SELECTABLE_FIGHTERS[state.menu_index % len(SELECTABLE_FIGHTERS)]
+        feature = pygame.Rect(74, 86, 400, 300)
+        pygame.draw.rect(screen, (18, 21, 30), feature)
+        pygame.draw.rect(screen, accent, feature, 2)
+        preview = fighter_preview(spec)
+        if preview is not None:
+            image = preview
+            ratio = min((feature.h - 120) / image.get_height(),
+                        (feature.w - 60) / image.get_width())
+            if ratio != 1.0:
+                image = pygame.transform.scale(
+                    image, (max(1, round(image.get_width() * ratio)),
+                            max(1, round(image.get_height() * ratio))))
+            screen.blit(image, image.get_rect(
+                midbottom=(feature.centerx, feature.bottom - 58)))
+        name = outlined_text(font, spec.label, accent)
+        screen.blit(name, name.get_rect(center=(feature.centerx, feature.bottom - 34)))
+        stats = outlined_text(small, "HP %d    SPEED %.1f    BODY %dx%d" % (
+            spec.hp or PLAYER_MAX_HP, spec.speed or MOVE_SPEED,
+            spec.body_w, spec.body_h), text_color)
+        screen.blit(stats, stats.get_rect(center=(feature.centerx, feature.bottom - 14)))
+
+        grid_x, grid_y, gap = 496, 86, 12
+        cols, rows = 2, 3
+        card_w = (rect.right - 20 - grid_x - gap) // cols
+        card_h = (300 - gap * (rows - 1)) // rows
+        for index, candidate in enumerate(SELECTABLE_FIGHTERS):
+            col, row = index % cols, index // cols
+            card = pygame.Rect(grid_x + col * (card_w + gap),
+                               grid_y + row * (card_h + gap), card_w, card_h)
+            chosen = index == state.menu_index
+            pygame.draw.rect(screen, (40, 45, 60) if chosen else (21, 24, 33), card)
+            pygame.draw.rect(screen, accent if chosen else (56, 61, 76),
+                             card, 2 if chosen else 1)
+            thumb = fighter_preview(candidate)
+            if thumb is not None:
+                image = thumb
+                ratio = min((card.h - 34) / image.get_height(),
+                            (card.w - 18) / image.get_width())
+                if ratio != 1.0:
+                    image = pygame.transform.scale(
+                        image, (max(1, round(image.get_width() * ratio)),
+                                max(1, round(image.get_height() * ratio))))
+                screen.blit(image, image.get_rect(
+                    midbottom=(card.centerx, card.bottom - 24)))
+            label = outlined_text(small, candidate.label,
+                                  accent if chosen else text_color)
+            screen.blit(label, label.get_rect(center=(card.centerx, card.bottom - 13)))
+
+        hint = "ARROWS  SELECT      ENTER  CONFIRM      ESC  BACK"
+        image = outlined_text(small, hint, muted)
+        screen.blit(image, image.get_rect(center=(WIDTH // 2, 478)))
+
+    elif state.menu_screen == "stages":
+        rect = pygame.Rect(44, 27, 872, 486)
+        draw_ui_panel(screen, rect, state)
+        screen.blit(outlined_text(font, "SELECT STAGE", accent), (74, 45))
+        step = outlined_text(small, "STEP 2 OF 3", muted)
+        screen.blit(step, (rect.right - 40 - step.get_width(), 49))
+        for index, path in enumerate(state.scenes):
+            card = stage_card_rect(index)
+            chosen = index == state.menu_index
+            pygame.draw.rect(screen, (40, 45, 60) if chosen else (21, 24, 33), card)
+            pygame.draw.rect(screen, accent if chosen else (56, 61, 76),
+                             card, 2 if chosen else 1)
+            thumb = stage_thumbnail(path, (card.w - 8, card.h - 28))
+            screen.blit(thumb, (card.x + 4, card.y + 4))
+            label = outlined_text(small, os.path.basename(path).upper(),
+                                  accent if chosen else text_color)
+            screen.blit(label, label.get_rect(center=(card.centerx, card.bottom - 14)))
+        if not state.scenes:
+            empty = outlined_text(small, "No stages found in assets/backgrounds", muted)
+            screen.blit(empty, empty.get_rect(center=(WIDTH // 2, 250)))
+        hint = "ARROWS  SELECT      ENTER  CONFIRM      ESC  BACK"
+        image = outlined_text(small, hint, muted)
+        screen.blit(image, image.get_rect(center=(WIDTH // 2, 478)))
+
+    elif state.menu_screen == "rounds":
+        rect = pygame.Rect(44, 27, 872, 486)
+        draw_ui_panel(screen, rect, state)
+        screen.blit(outlined_text(font, "ROUND COUNT", accent), (74, 45))
+        step = outlined_text(small, "STEP 3 OF 3", muted)
+        screen.blit(step, (rect.right - 40 - step.get_width(), 49))
+        options = (
+            ("1 ROUND", "One knockout takes the fight. Fastest way to climb."),
+            ("2 ROUNDS", "First to two - the rival can still steal one back."),
+            ("3 ROUNDS", "First to three. A long, scrappy fight every time."),
+        )
+        for index, (label, blurb) in enumerate(options):
+            card = round_card_rect(index)
+            chosen = index == state.menu_index
+            pygame.draw.rect(screen, (40, 45, 60) if chosen else (21, 24, 33), card)
+            pygame.draw.rect(screen, accent if chosen else (56, 61, 76),
+                             card, 3 if chosen else 1)
+            head = outlined_text(font, label, accent if chosen else text_color)
+            screen.blit(head, (card.x + 28, card.y + 16))
+            body = outlined_text(small, blurb, muted)
+            screen.blit(body, (card.x + 28, card.y + 50))
+            badge = outlined_text(small, "FIRST TO %d" % (index + 1),
+                                  (120, 230, 170) if chosen else muted)
+            screen.blit(badge, (card.right - badge.get_width() - 24, card.y + 22))
+        hint = "ARROWS  SELECT      ENTER  START FIGHT      ESC  BACK"
+        image = outlined_text(small, hint, muted)
+        screen.blit(image, image.get_rect(center=(WIDTH // 2, 478)))
+
     elif state.menu_screen == "confirm":
         rect = pygame.Rect(220, 137, 520, 270)
         draw_ui_panel(screen, rect, state)
@@ -3221,9 +3626,12 @@ def draw(screen: pygame.Surface, clock: pygame.time.Clock, player: Player,
                 (12, HUD_BOTTOM_Y))
     pygame.draw.rect(screen, (76, 91, 128),
                      (12, HUD_BOTTOM_Y, WIDTH - 24, HUD_BOTTOM_H), 1)
+    round_bits = (f"RD {state.round_no}  {state.player_rounds}-{state.rival_rounds}     "
+                  if state.match_rounds > 1 else "")
     arcade_line = (
         f"RIVAL  {dummy.label.upper()}     "
         f"WINS  {state.challenge.rounds_won}/{state.challenge.rounds_total}     "
+        f"{round_bits}"
         f"LIVES  {state.challenge.lives}     "
         f"SCORE  {state.challenge.score:06d}     BEST  {state.challenge.high_score:06d}"
     )
@@ -3276,6 +3684,8 @@ def draw(screen: pygame.Surface, clock: pygame.time.Clock, player: Player,
 
     if state.challenge.finished:
         draw_arcade_result(screen, font, state.challenge, state)
+    elif state.countdown > 0:
+        draw_countdown(screen, state)
     if state.menu_screen != "game":
         draw_menu_overlay(screen, font, small, state)
 
@@ -3299,6 +3709,148 @@ def draw_arcade_result(screen: pygame.Surface, font: pygame.font.Font,
         color = (235, 235, 245) if index < 2 else (170, 185, 215)
         image = outlined_text(font, line, color)
         screen.blit(image, image.get_rect(center=(WIDTH // 2, 235 + index * 35)))
+
+
+_FX_FONTS: dict = {}
+_fx_scratch: Optional[pygame.Surface] = None
+
+
+def fx_surface() -> pygame.Surface:
+    """Shared transparent canvas for rings and speed lines."""
+    global _fx_scratch
+    if _fx_scratch is None or _fx_scratch.get_size() != (WIDTH, HEIGHT):
+        _fx_scratch = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+    return _fx_scratch
+
+
+def fx_font(size: int) -> pygame.font.Font:
+    """Heavy display face for the countdown, built once per size."""
+    font_obj = _FX_FONTS.get(size)
+    if font_obj is None:
+        font_obj = pygame.font.SysFont("consolas", size, bold=True)
+        _FX_FONTS[size] = font_obj
+    return font_obj
+
+
+def ease_out_back(x: float) -> float:
+    """Overshoot and settle - the arcade number pop."""
+    x = 0.0 if x < 0.0 else (1.0 if x > 1.0 else x)
+    p = x - 1.0
+    return 1.0 + 2.70158 * p * p * p + 1.70158 * p * p
+
+
+def fx_fit(img: pygame.Surface, scale: float, angle: float) -> pygame.Surface:
+    """Scale then rotate a rendered line without softening the pixels."""
+    if scale <= 0.01:
+        scale = 0.01
+    if abs(scale - 1.0) < 0.02 and abs(angle) < 0.4:
+        return img
+    width, height = img.get_size()
+    out = pygame.transform.scale(img, (max(1, round(width * scale)),
+                                       max(1, round(height * scale))))
+    if abs(angle) >= 0.4:
+        out = pygame.transform.rotate(out, angle)
+    return out
+
+
+def fx_blit(screen: pygame.Surface, img: pygame.Surface, center, alpha: int = 255,
+            glow: int = 0, glow_color=(255, 255, 255)) -> None:
+    """Centre a text image, optionally behind a warm halo."""
+    if alpha <= 0:
+        return
+    shown = img
+    if alpha < 255:
+        shown = img.copy()
+        shown.set_alpha(alpha)
+    if glow > 0:
+        halo = shown.copy()
+        halo.fill(tuple(glow_color) + (150,), special_flags=pygame.BLEND_RGBA_MULT)
+        for dx, dy in ((glow, 0), (-glow, 0), (0, glow), (0, -glow),
+                       (glow, glow), (-glow, -glow), (glow, -glow), (-glow, glow)):
+            screen.blit(halo, (center[0] - shown.get_width() / 2 + dx,
+                               center[1] - shown.get_height() / 2 + dy))
+    screen.blit(shown, (center[0] - shown.get_width() / 2,
+                        center[1] - shown.get_height() / 2))
+
+
+def fx_ring(screen, center, radius, color, alpha, width=5):
+    """Expanding shock ring behind each countdown number."""
+    if alpha <= 0 or radius <= 1:
+        return
+    ring = fx_surface()
+    ring.fill((0, 0, 0, 0))
+    pygame.draw.circle(ring, tuple(color) + (min(255, alpha),),
+                       (int(center[0]), int(center[1])), int(radius), width)
+    screen.blit(ring, (0, 0))
+
+
+def fx_speed_lines(screen, center, strength, color):
+    """Burst of rays that fire out of the word FIGHT!."""
+    if strength <= 0:
+        return
+    layer = fx_surface()
+    layer.fill((0, 0, 0, 0))
+    alpha = int(210 * strength)
+    inner = 96 + int(150 * (1.0 - strength))
+    outer = inner + 54 + int(150 * (1.0 - strength))
+    for index in range(24):
+        angle = index * math.pi / 12.0
+        x1 = center[0] + math.cos(angle) * inner
+        y1 = center[1] + math.sin(angle) * inner * 0.62
+        x2 = center[0] + math.cos(angle) * outer
+        y2 = center[1] + math.sin(angle) * outer * 0.62
+        pygame.draw.line(layer, tuple(color) + (alpha,), (x1, y1), (x2, y2), 4)
+    screen.blit(layer, (0, 0))
+
+
+def draw_countdown(screen: pygame.Surface, state: GameState) -> None:
+    """3 - 2 - 1 - FIGHT!: pop, glow, wobble and a flash on the last word."""
+    if state.countdown <= 0:
+        return
+    elapsed = COUNTDOWN_TOTAL - state.countdown
+    numbers_span = COUNTDOWN_NUMBERS * COUNTDOWN_TICKS
+    center = (WIDTH // 2, HEIGHT // 2 + 8)
+    reduced = state.settings.values.get("reduced_flash", False)
+    screen.blit(translucent_rect((WIDTH, HEIGHT), (4, 5, 11, 150)), (0, 0))
+
+    if elapsed < numbers_span:
+        index = min(elapsed // COUNTDOWN_TICKS, COUNTDOWN_NUMBERS - 1)
+        local = (elapsed % COUNTDOWN_TICKS) / float(COUNTDOWN_TICKS)
+        color = COUNTDOWN_COLORS[index]
+        label = str(COUNTDOWN_NUMBERS - index)
+        grow = ease_out_back(min(1.0, local / 0.5))
+        scale = 0.40 + 0.95 * grow
+        angle = math.sin(local * 8.0) * (1.0 - local) * 8.0
+        fade = 1.0 if local < 0.86 else max(0.0, 1.0 - (local - 0.86) / 0.14)
+        ring_t = min(1.0, local / 0.9)
+        fx_ring(screen, center, int(46 + ring_t * 165), color,
+                int(175 * (1.0 - ring_t)))
+        image = fx_fit(outlined_text(fx_font(168), label, (255, 255, 255)),
+                       scale, angle)
+        fx_blit(screen, image, center, alpha=int(255 * fade),
+                glow=7, glow_color=color)
+        banner = outlined_text(fx_font(30), "ROUND %d" % state.round_no,
+                               (232, 236, 248))
+        fx_blit(screen, banner, (WIDTH // 2, 92), alpha=int(225 * fade))
+        return
+
+    local = (elapsed - numbers_span) / float(FIGHT_TICKS)
+    color = FIGHT_COLOR
+    grow = ease_out_back(min(1.0, local / 0.36))
+    scale = 0.24 + 1.10 * grow
+    if local > 0.72:
+        scale *= 1.0 + (local - 0.72) * 0.7
+    angle = math.sin(local * 16.0) * max(0.0, 1.0 - local) * 7.0
+    fade = 1.0 if local < 0.82 else max(0.0, 1.0 - (local - 0.82) / 0.18)
+    fx_speed_lines(screen, center, max(0.0, 1.0 - local / 0.55), color)
+    image = fx_fit(outlined_text(fx_font(112), "FIGHT!", (255, 255, 255)),
+                   scale, angle)
+    fx_blit(screen, image, (WIDTH // 2, HEIGHT // 2 + 6),
+            alpha=int(255 * fade), glow=10, glow_color=color)
+    if local < 0.12 and not reduced:
+        flash = int(215 * (1.0 - local / 0.12))
+        screen.blit(translucent_rect((WIDTH, HEIGHT), (255, 255, 255, flash)),
+                    (0, 0))
 
 
 def main() -> None:
